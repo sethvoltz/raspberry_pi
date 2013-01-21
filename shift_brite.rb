@@ -1,25 +1,19 @@
 #!/usr/bin/env ruby
 
 $: << File.expand_path(File.dirname __FILE__)
+require 'util'
 require 'gpio'
-
-class Numeric
-  def scale_between(from_min, from_max, to_min, to_max)
-    ((to_max - to_min) * (self - from_min)) / (from_max - from_min) + to_min
-  end
-end
 
 module GPIO
   class ShiftBrite
-    MODULES = 4
+    attr_reader :data_pin, :latch_pin, :enable_pin, :clock_pin, :current, :num_pixels
 
-    attr_reader :data_pin, :latch_pin, :enable_pin, :clock_pin, :current
-
-    def initialize data_pin, latch_pin, enable_pin, clock_pin
+    def initialize data_pin, latch_pin, enable_pin, clock_pin, num_pixels
       @data_pin   = GPIO::Pin.new data_pin,   :out
       @latch_pin  = GPIO::Pin.new latch_pin,  :out
       @enable_pin = GPIO::Pin.new enable_pin, :out
       @clock_pin  = GPIO::Pin.new clock_pin,  :out
+      @num_pixels = num_pixels
 
       # Set proper pins low before writes
       @latch_pin.set  :low
@@ -40,8 +34,8 @@ module GPIO
       GPIO.shift_out @data_pin, @clock_pin, (commandPacket >> 8)  & 255, :msb_first
       GPIO.shift_out @data_pin, @clock_pin,  commandPacket        & 255, :msb_first
 
-      @latch_pin.set :high
-      @latch_pin.set :low
+      # Delay adjustment may be necessary depending on chain length
+      @latch_pin.pulse 0.01, true
     end
 
     def pixels
@@ -49,7 +43,7 @@ module GPIO
     end
 
     def pixels= pixels
-      @pixels = pixels[0..MODULES-1].reverse # Last module gets first color in array.
+      @pixels = pixels[0..num_pixels-1].reverse # Last module gets first color in array.
     end
 
     def current= current
@@ -57,33 +51,24 @@ module GPIO
     end
 
     def write_pixels
-      sendPacket 0b01, @current, @current, @current # Write current control
-      MODULES.times do |index|
-        sendPacket 0b00, *@pixels[index] # Write color
+      sendPacket 0b01, current, current, current # Write current control
+      num_pixels.times do |index|
+        sendPacket 0b00, *pixels[index] # Write color
       end
     end
 
     def cleanup
-      MODULES.times { sendPacket 0b00, 0, 0, 0 }
+      num_pixels.times { sendPacket 0b00, 0, 0, 0 }
     end
   end
 end
 
 class LightShow
-  # https://projects.drogon.net/raspberry-pi/wiringpi/pins/
-  DATA_PIN   = 12 # DI
-  LATCH_PIN  =  3 # LI
-  ENABLE_PIN =  2 # EI
-  CLOCK_PIN  = 14 # CI
-
-  LATCH_DELAY = 0.001 # adjustment may be necessary depending on chain length
-  MIN_DELAY = 0.01
-  MAX_DELAY = 2
-
   attr_accessor :speed
 
   def initialize
-    @shift_brite = GPIO::ShiftBrite.new DATA_PIN, LATCH_PIN, ENABLE_PIN, CLOCK_PIN
+    # https://projects.drogon.net/raspberry-pi/wiringpi/pins/
+    @shift_brite = GPIO::ShiftBrite.new 12, 3, 2, 14
     @key_thread = Thread.new key_catcher
     @shift_brite.pixels = [[1023, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]
     @speed = 50 # percent
@@ -106,7 +91,7 @@ class LightShow
       end
 
       @shift_brite.pixels << @shift_brite.pixels.shift # Cycle the color array
-      sleep @speed.scale_between 0, 100, MAX_DELAY, MIN_DELAY # Inverted for proper semantic
+      sleep @speed.scale_between 0, 100, 1.0, 0.01 # Inverted for proper semantic
     end
   end
 

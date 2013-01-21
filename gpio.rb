@@ -46,6 +46,12 @@ module GPIO
       @value = value
     end
 
+    def pulse delay = nil, pre_sleep = false
+      set :high if delay and pre_sleep
+      sleep delay if sleep
+      set :low
+    end
+
     def pin
       GPIO_PINS.index @pin
     end
